@@ -17,7 +17,9 @@ def save_cookie():
     userid = config['login']['userid']
     password = config['login']['password']
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=False)
+        browser = playwright.chromium.launch(
+            headless=config.getboolean('settings', 'is_headless')  # 是否開啟無頭模式
+        )
         context = browser.new_context()
         page = context.new_page()
         page.goto("https://user.gamer.com.tw/login.php")
@@ -26,6 +28,7 @@ def save_cookie():
             page.fill('#form-login [name=password]', password)
             page.click('#btn-login')
             page.wait_for_timeout(3000)
+            # TODO: 確認是否登入成功
             context.storage_state(path="login_cookie.json")
         except:
             print('登入失敗')
@@ -61,15 +64,7 @@ def get_goods_url():
             if goods not in goods_list:
                 goods_list.append(goods)
 
-    print('=' * 30)
-    for goods in goods_list:
-        print('●', goods['name'], goods['price'])
-        print('--->', goods['url'])
-    print('=' * 30)
-    user_input_text = input(f'(數量:{len(goods_list)}) 確認是否抓取？')
-    if user_input_text == 'y' or user_input_text == 'Y':
-        return goods_list
-    return None
+    return goods_list
 
 
 class exchangeGoodsThread(threading.Thread):
@@ -83,7 +78,7 @@ class exchangeGoodsThread(threading.Thread):
         self.url_queue = url_queue
         self.error_queue = error_queue
         self.browser = None
-        self.is_headless = False  # 是否開啟無頭模式
+        self.is_headless = config.getboolean('settings', 'is_headless')  # 是否開啟無頭模式
         self.page = None
         self.frame = None
         self.url = None
@@ -101,6 +96,7 @@ class exchangeGoodsThread(threading.Thread):
                 if not self.is_login():
                     self.browser.close()
                     return
+                self.page.wait_for_timeout(2000)
 
                 # 重複觀看此商品廣告
                 for i in range(int(config['settings']['watch_num'])):
@@ -110,7 +106,7 @@ class exchangeGoodsThread(threading.Thread):
                     if need_break:
                         break
 
-                    time.sleep(5)
+                    self.page.wait_for_timeout(5000)
                     # 判斷是否已經自動跳到抽獎
                     if 'buyD' not in self.page.url:
                         # 點擊"確認觀看廣告"
@@ -122,17 +118,17 @@ class exchangeGoodsThread(threading.Thread):
                         if need_break:
                             break
 
-                        time.sleep(5)
+                        self.page.wait_for_timeout(5000)
                         # 如果出現"繼續有聲播放"按鈕需點擊後繼續
                         self.click_continue_watch_ad(timeout=20)
 
-                        time.sleep(10)
+                        self.page.wait_for_timeout(18000)
                         # 影片"播放完畢"或"可跳過"，則關閉影片
                         need_break = self.close_ad_iframe(timeout=10)
                         if need_break:
                             break
 
-                    # time.sleep(3)
+                    # self.page.wait_for_timeout(3000)
                     # 看完廣告，送出抽獎資料
                     need_break = self.send_lottery_info(timeout=15)
                     if need_break:
@@ -252,13 +248,17 @@ class exchangeGoodsThread(threading.Thread):
         """關閉影片，影片播放完畢或可跳過"""
         need_break = False
         try:
-            self.frame.click('.videoAdUiSkipButtonExperimentalText, ' +
-                        '#close_button #close_button_icon, ' +
-                        '#google-rewarded-video > img:nth-child(4)',
-                        timeout=timeout*1000)
+            self.frame.click(
+                '#google-rewarded-video > img:nth-child(4), ' +
+                '#close_button #close_button_icon, ' +
+                '.videoAdUiSkipButtonExperimentalText',
+                timeout=timeout*1000)
+            #google-rewarded-video img[src="https://googleads.g.doubleclick.net/pagead/images/gmob/close-circle-30x30.png"]
         except Exception:
             # 判斷是否已經自動跳到抽獎
-            if 'buyD' not in self.page.url:
+            print(self.page.url)
+            # self.page.screenshot(path="example.png")
+            if 'buyD' in self.page.url:
                 return need_break
             try:
                 # 出現"發生錯誤，請重新嘗試(1)"視窗
@@ -270,7 +270,7 @@ class exchangeGoodsThread(threading.Thread):
             except Exception:
                 print(f'{self.index}：廣告播放失敗 或 找不到關閉影片按鈕')
                 self.error_queue.put([self.url, '廣告播放失敗 或 找不到關閉影片按鈕'])
-                # time.sleep(10)
+                time.sleep(600)
                 need_break = True
         return need_break
 
@@ -285,7 +285,7 @@ class exchangeGoodsThread(threading.Thread):
         except Exception:
             print(f'{self.index}：找不到"我已閱讀注意事項，並確認兌換此商品"或"確認兌換"按鈕')
             self.error_queue.put([self.url, '找不到"我已閱讀注意事項，並確認兌換此商品"或"確認兌換"按鈕'])
-            # time.sleep(10)
+            time.sleep(600)
             need_break = True
         return need_break
 
@@ -306,6 +306,14 @@ def exchange_all_goods(is_crawl=True, goods_urls=None):
     """兌換全部商品(觀看廣告)，使用多執行緒"""
     if is_crawl:
         items_url = get_goods_url()
+        print('=' * 30)
+        for goods in items_url:
+            print('●', goods['name'], goods['price'])
+            print('--->', goods['url'])
+        print('=' * 30)
+        user_input_text = input(f'(數量:{len(items_url)}) 確認是否抓取？(Y/n) ')
+        if user_input_text == 'n' or user_input_text == 'N':
+            return None
         urls = [items['url'] for items in items_url]
     else:
         urls = goods_urls
@@ -342,18 +350,19 @@ def exchange_all_goods(is_crawl=True, goods_urls=None):
     print('========== 全數結束 ==========')
     print(f'耗時：{time.time()-time_start:.0f} 秒')
     # 列出發生錯誤的網址
-    while error_queue.qsize() > 0:
-        print(error_queue.get())
+    if error_queue.qsize() > 0:
+        print('========== 異常任務 ==========')
+        while error_queue.qsize() > 0:
+            print(error_queue.get())
 
 
 if __name__ == "__main__":
     # goods_urls = [
-    #     'https://fuli.gamer.com.tw/shop_detail.php?sn=2389',
-    #     'https://fuli.gamer.com.tw/shop_detail.php?sn=2324',
+    #     'https://fuli.gamer.com.tw/shop_detail.php?sn=2423',
+    #     'https://fuli.gamer.com.tw/shop_detail.php?sn=2386',
     # ]
     # exchange_all_goods(is_crawl=False, goods_urls=goods_urls)
     # exchange_all_goods(is_crawl=True)
-
 
     # 登入巴哈網站，儲存 cookie
     save_cookie()

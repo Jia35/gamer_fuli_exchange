@@ -62,6 +62,8 @@ config.ini 檔案內除了巴哈姆特的帳號密碼，還有其他可以設定
 thread_num = 3
 ; 一個商品最多觀看廣告次數 (如果提前結束會跳離)
 watch_num = 15
+; 是否開啟瀏覽器的無頭模式
+is_headless = true
 ```
 
 ## Matters Needing Attention
